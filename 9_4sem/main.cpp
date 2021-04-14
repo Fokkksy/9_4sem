@@ -43,6 +43,105 @@ public:
         }
     }
 
+public:
+
+    void run()
+    {
+        auto reader = std::thread(&Chat::read, this);
+
+        write();
+
+        m_exit_flag = true;
+
+        reader.join();
+
+        send_message(m_user_name + " left the chat");
+    }
+
+private:
+
+    void read()
+    {
+        show_history();
+
+        send_message(m_user_name + " joined the chat");
+
+        while (true)
+        {
+
+            if (m_exit_flag)
+            {
+                break;
+            }
+
+            std::cout << *(m_vector->end() - 1) << std::endl;
+
+            ++m_local_messages;
+        }
+    }
+
+    void show_history()
+    {
+
+        for (const auto& message : *m_vector)
+        {
+            std::cout << message << std::endl;
+            ++m_local_messages;
+        }
+    }
+
+    void send_message(const std::string& message)
+    {
+
+        m_vector->push_back(string_t(message.c_str(), m_shared_memory.get_segment_manager()));
+
+        ++(*m_messages);
+
+        ++m_local_messages;
+
+    }
+
+    void write()
+    {
+        std::string x;
+
+        while (true)
+        {
+
+            std::getline(std::cin, x);
+
+            if (x == "exit")
+            {
+                m_exit_flag = true;
+                --m_local_messages;
+                break;
+
+            }
+
+            send_message(m_user_name + ':' + x);
+
+        }
+    }
+
+private:
+
+    static inline const std::string shared_memory_name = "shared_memory";
+
+private:
+
+    std::string m_user_name;
+
+    std::atomic < bool > m_exit_flag;
+
+    shared_memory_t m_shared_memory;
+
+    vector_t* m_vector;
+    counter_t* m_users;
+    counter_t* m_messages;
+
+    std::size_t m_local_messages;
+};
+
 int main(int argc, char** argv)
 {
 	using allocator = boost::interprocess::allocator < char,
