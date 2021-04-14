@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -7,6 +10,8 @@
 #include <boost/interprocess/containers/string.hpp>
 #include <boost/interprocess/containers/vector.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/sync/interprocess_condition.hpp>
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
 #include <boost/interprocess/sync/scoped_lock.hpp>
 
 class Chat
@@ -19,6 +24,9 @@ private:
     using string_t = boost::interprocess::basic_string < char, std::char_traits < char >, string_allocator_t>;
     using vector_allocator_t = boost::interprocess::allocator < string_t, manager_t >;
     using vector_t = boost::interprocess::vector < string_t, vector_allocator_t >;
+    using mutex_t = boost::interprocess::interprocess_mutex;
+    using condition_t = boost::interprocess::interprocess_condition;
+    using counter_t = std::atomic < std::size_t >;
 
 public:
 
@@ -26,6 +34,8 @@ public:
         m_shared_memory(boost::interprocess::open_or_create, shared_memory_name.c_str(), 50000)
     {
         m_vector = m_shared_memory.find_or_construct < vector_t >("vector")(m_shared_memory.get_segment_manager());
+        m_mutex = m_shared_memory.find_or_construct<mutex_t>("m_mutex")();
+        m_condition = m_shared_memory.find_or_construct<condition_t>("m_condition")();
         m_users = m_shared_memory.find_or_construct<counter_t>("m_users")(0);
         m_messages = m_shared_memory.find_or_construct<counter_t>("m_messages")(0);
 
@@ -53,6 +63,8 @@ public:
 
         m_exit_flag = true;
 
+        m_condition->notify_all();
+
         reader.join();
 
         send_message(m_user_name + " left the chat");
@@ -68,6 +80,9 @@ private:
 
         while (true)
         {
+            std::unique_lock lock(*m_mutex);
+
+            m_condition->wait(lock, [this]() {return m_local_messages < *m_messages; });
 
             if (m_exit_flag)
             {
@@ -82,6 +97,7 @@ private:
 
     void show_history()
     {
+        std::scoped_lock lock(*m_mutex);
 
         for (const auto& message : *m_vector)
         {
@@ -93,12 +109,15 @@ private:
     void send_message(const std::string& message)
     {
 
+        std::scoped_lock lock(*m_mutex);
+
         m_vector->push_back(string_t(message.c_str(), m_shared_memory.get_segment_manager()));
 
         ++(*m_messages);
 
         ++m_local_messages;
 
+        m_condition->notify_all();
     }
 
     void write()
@@ -136,6 +155,8 @@ private:
     shared_memory_t m_shared_memory;
 
     vector_t* m_vector;
+    mutex_t* m_mutex;
+    condition_t* m_condition;
     counter_t* m_users;
     counter_t* m_messages;
 
